@@ -1,0 +1,6 @@
+{
+  "name": "Stack",
+  "description": "High-speed localized client portal and file-locking utility designed for Indian freelancers, featuring instant UPI checkout simulations and milestone tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

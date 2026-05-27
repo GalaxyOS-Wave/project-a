@@ -1,0 +1,68 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(existingData) {
+      return isSignedIn() && existingData.owner_id == request.auth.uid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Project Validation Blueprint
+    function isValidProject(data) {
+      return data.keys().hasAll(['id', 'owner_id', 'client_name', 'project_name', 'amount_due', 'is_paid', 'created_at', 'milestones'])
+        && data.keys().size() <= 16
+        && data.id is string && data.id.size() <= 128
+        && data.owner_id is string && data.owner_id.size() <= 128
+        && data.client_name is string && data.client_name.size() <= 256
+        && data.project_name is string && data.project_name.size() <= 256
+        && data.amount_due is int && data.amount_due >= 0
+        && data.is_paid is bool
+        && data.created_at is string && data.created_at.size() <= 64
+        && data.milestones is list
+        && data.milestones.size() <= 20;
+    }
+
+    // Projects Rules Matched Domain
+    match /projects/{projectId} {
+      // GET: Allowed for anyone with the specific cryptographically secure link (unauthenticated client access)
+      // LIST: Restricted purely to the authenticated developer workspace owner to prevent info scraping
+      allow get: if true;
+      allow list: if isSignedIn() && existing().owner_id == request.auth.uid;
+
+      allow create: if isSignedIn()
+        && isValidId(projectId)
+        && isValidProject(incoming())
+        && incoming().owner_id == request.auth.uid;
+
+      allow update: if (
+        // Action 1: Owner full sync, preserving identity fields
+        (isOwner(existing()) && isValidProject(incoming()) && incoming().owner_id == existing().owner_id && incoming().id == existing().id && incoming().created_at == existing().created_at) ||
+        // Action 2: Client UPI checkout simulation, changing is_paid to true only. No other data altered.
+        (!existing().is_paid && incoming().is_paid == true && incoming().diff(existing()).affectedKeys().hasOnly(['is_paid']))
+      );
+
+      allow delete: if isOwner(existing());
+    }
+  }
+}
