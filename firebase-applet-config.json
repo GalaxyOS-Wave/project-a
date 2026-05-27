@@ -1,8 +1,8 @@
-const firebaseConfig = {
-  apiKey: "AIzaSyDtK-Y79zm6N1r14Lpcyh1UyPGstpNI4Ak",
-  authDomain: "studio-8483322952-7684f.firebaseapp.com",
-  projectId: "studio-8483322952-7684f",
-  storageBucket: "studio-8483322952-7684f.firebasestorage.app",
-  messagingSenderId: "159956669998",
-  appId: "1:159956669998:web:2f0baf337b4103fdf8b1bf"
+{
+  apiKey: "AIzaSyCucs1zJq2wn4FFcCnYPLosLgrbyTtJrJ0",
+  authDomain: "scientific-conquest-blsxp.firebaseapp.com",
+  projectId: "scientific-conquest-blsxp",
+  storageBucket: "scientific-conquest-blsxp.firebasestorage.app",
+  messagingSenderId: "425194002770",
+  appId: "1:425194002770:web:0bd926ff113a6b5c23028b"
 };
