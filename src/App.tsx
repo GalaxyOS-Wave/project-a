@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { 
   collection, 
   doc, 
@@ -205,12 +206,25 @@ export default function App() {
   const [currentView, setCurrentView] = useState<'dashboard' | 'portal'>('dashboard');
   const [selectedPortalId, setSelectedPortalId] = useState<string | null>(null);
   const [isSandboxUnlocked, setIsSandboxUnlocked] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [showAuthTroubleshooter, setShowAuthTroubleshooter] = useState(false);
 
   // Auth and sync status
   const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
-  // Load profile static settings, clients and invoices on boot
+  // Unique persistent offline sandbox user ID stored inside localStorage to identify database records
+  const [sandboxUserId] = useState<string>(() => {
+    let id = localStorage.getItem('project_a_sandbox_uid');
+    if (!id) {
+      id = `sb-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+      localStorage.setItem('project_a_sandbox_uid', id);
+    }
+    return id;
+  });
+
+  // Load profile static settings on boot
   useEffect(() => {
     const saved = localStorage.getItem('project_a_profile');
     if (saved) {
@@ -220,69 +234,13 @@ export default function App() {
         // Fallback
       }
     }
-
-    const savedClients = localStorage.getItem('project_a_clients');
-    if (savedClients) {
-      try {
-        setClients(JSON.parse(savedClients));
-      } catch (e) {
-        setClients(DEFAULT_CLIENTS);
-      }
-    } else {
-      setClients(DEFAULT_CLIENTS);
-    }
-
-    const savedInvoices = localStorage.getItem('project_a_invoices');
-    if (savedInvoices) {
-      try {
-        setInvoices(JSON.parse(savedInvoices));
-      } catch (e) {
-        setInvoices(DEFAULT_INVOICES);
-      }
-    } else {
-      setInvoices(DEFAULT_INVOICES);
-    }
   }, []);
 
   // Monitor Authentication State change
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      if (!currentUser) {
-        // Fallback to localStorage load
-        const saved = localStorage.getItem('project_a_db');
-        if (saved) {
-          try {
-            setProjects(JSON.parse(saved));
-          } catch (e) {
-            setProjects(DEFAULT_PROJECTS);
-          }
-        } else {
-          setProjects(DEFAULT_PROJECTS);
-        }
-
-        const savedClients = localStorage.getItem('project_a_clients');
-        if (savedClients) {
-          try {
-            setClients(JSON.parse(savedClients));
-          } catch (e) {
-            setClients(DEFAULT_CLIENTS);
-          }
-        } else {
-          setClients(DEFAULT_CLIENTS);
-        }
-
-        const savedInvoices = localStorage.getItem('project_a_invoices');
-        if (savedInvoices) {
-          try {
-            setInvoices(JSON.parse(savedInvoices));
-          } catch (e) {
-            setInvoices(DEFAULT_INVOICES);
-          }
-        } else {
-          setInvoices(DEFAULT_INVOICES);
-        }
-      }
+      setAuthLoading(false);
     });
 
     return () => unsubscribeAuth();
@@ -323,17 +281,56 @@ export default function App() {
     };
   }, []);
 
-  // Real-time Dashboard listener when Signed In
+  // Auto-seed sandbox user's data on first-time open inside Firestore securely
   useEffect(() => {
-    if (!user) return;
+    if (authLoading) return; // Wait until initial Auth state is fully resolved
+    if (user) return; // Only for sandbox
+    const seeded = localStorage.getItem('project_a_sandbox_seeded_v3');
+    if (!seeded && sandboxUserId) {
+      const seedData = async () => {
+        try {
+          setIsSyncing(true);
+          // 1. Seed clients
+          for (const client of DEFAULT_CLIENTS) {
+            const clientWithAuth = { ...client, owner_id: sandboxUserId };
+            await setDoc(doc(db, 'clients', client.id), cleanUndefined(clientWithAuth));
+          }
+          // 2. Seed projects
+          for (const proj of DEFAULT_PROJECTS) {
+            const projWithAuth = { ...proj, owner_id: sandboxUserId };
+            await setDoc(doc(db, 'projects', proj.id), cleanUndefined(projWithAuth));
+          }
+          // 3. Seed invoices
+          for (const inv of DEFAULT_INVOICES) {
+            const invWithAuth = { ...inv, owner_id: sandboxUserId };
+            await setDoc(doc(db, 'invoices', inv.id), cleanUndefined(invWithAuth));
+          }
+          localStorage.setItem('project_a_sandbox_seeded_v3', 'true');
+        } catch (error) {
+          console.error("Failed to seed sandbox data to Firestore: ", error);
+        } finally {
+          setIsSyncing(false);
+        }
+      };
+      seedData();
+    }
+  }, [authLoading, user, sandboxUserId]);
+
+  // Real-time Dashboard listener when Signed In or Sandbox active
+  useEffect(() => {
+    if (authLoading) return; // Prevent connecting query listeners until Auth finishes loading
+    const activeOwnerId = user ? user.uid : sandboxUserId;
+    if (!activeOwnerId) return;
 
     setIsSyncing(true);
-    const q = query(
+    
+    // Projects listener
+    const qProjects = query(
       collection(db, 'projects'),
-      where('owner_id', '==', user.uid)
+      where('owner_id', '==', activeOwnerId)
     );
 
-    const unsubscribeSnapshot = onSnapshot(q, (snapshot) => {
+    const unsubscribeProjects = onSnapshot(qProjects, (snapshot) => {
       const fetched: Project[] = [];
       snapshot.forEach((docSnap) => {
         fetched.push({
@@ -341,6 +338,9 @@ export default function App() {
           ...docSnap.data()
         } as Project);
       });
+      // Sort projects by created_at desc (since we want newly created projects on top)
+      fetched.sort((a,b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      
       setProjects(fetched);
       setIsSyncing(false);
     }, (error) => {
@@ -348,8 +348,50 @@ export default function App() {
       handleFirestoreError(error, OperationType.LIST, 'projects');
     });
 
-    return () => unsubscribeSnapshot();
-  }, [user]);
+    // Clients listener
+    const qClients = query(
+      collection(db, 'clients'),
+      where('owner_id', '==', activeOwnerId)
+    );
+
+    const unsubscribeClients = onSnapshot(qClients, (snapshot) => {
+      const fetched: ClientRecord[] = [];
+      snapshot.forEach((docSnap) => {
+        fetched.push({
+          id: docSnap.id,
+          ...docSnap.data()
+        } as ClientRecord);
+      });
+      setClients(fetched);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'clients');
+    });
+
+    // Invoices listener
+    const qInvoices = query(
+      collection(db, 'invoices'),
+      where('owner_id', '==', activeOwnerId)
+    );
+
+    const unsubscribeInvoices = onSnapshot(qInvoices, (snapshot) => {
+      const fetched: Invoice[] = [];
+      snapshot.forEach((docSnap) => {
+        fetched.push({
+          id: docSnap.id,
+          ...docSnap.data()
+        } as Invoice);
+      });
+      setInvoices(fetched);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'invoices');
+    });
+
+    return () => {
+      unsubscribeProjects();
+      unsubscribeClients();
+      unsubscribeInvoices();
+    };
+  }, [authLoading, user, sandboxUserId]);
 
   // Real-time Single Document client-portal listener
   // This allows unauthenticated users visiting a share link to get updates in real-time
@@ -376,30 +418,11 @@ export default function App() {
     return () => unsubscribePortal();
   }, [selectedPortalId]);
 
-  // General storage events sync for local offline mode tabs
-  useEffect(() => {
-    if (user) return; // Do not use storage event sync when signed in
-
-    const handleCrossTabSync = (e: StorageEvent) => {
-      if (e.key === 'project_a_db' && e.newValue) {
-        try {
-          setProjects(JSON.parse(e.newValue));
-        } catch (err) {
-          // Fallback
-        }
-      }
-    };
-
-    window.addEventListener('storage', handleCrossTabSync);
-    return () => {
-      window.removeEventListener('storage', handleCrossTabSync);
-    };
-  }, [user]);
-
   // Create Project Action with Dual Support (Cloud vs Local Sandbox)
   const handleCreateProject = async (newProjectData: Omit<Project, 'id' | 'created_at' | 'owner_id'>) => {
     let finalClientId = newProjectData.client_id;
     const trimmedName = newProjectData.client_name.trim();
+    const activeOwnerId = user ? user.uid : sandboxUserId;
 
     // Check if the client_id or client_name already matches an existing customer record
     let existingClient = clients.find(c => 
@@ -415,7 +438,7 @@ export default function App() {
       const colors = ["bg-blue-500", "bg-emerald-500", "bg-indigo-500", "bg-purple-500", "bg-pink-500", "bg-amber-500"];
       const randomColor = colors[Math.floor(Math.random() * colors.length)];
       
-      const autoCreatedClient: ClientRecord = {
+      const autoCreatedClient: ClientRecord & { owner_id: string } = {
         id: newClientId,
         name: trimmedName,
         email: "",
@@ -423,64 +446,50 @@ export default function App() {
         phone: "",
         notes: `Automatically generated from project creation: "${newProjectData.project_name}"`,
         created_at: new Date().toISOString(),
-        avatar_color: randomColor
+        avatar_color: randomColor,
+        owner_id: activeOwnerId
       };
 
-      const updatedClients = [autoCreatedClient, ...clients];
-      setClients(updatedClients);
-      localStorage.setItem('project_a_clients', JSON.stringify(updatedClients));
+      try {
+        await setDoc(doc(db, 'clients', newClientId), cleanUndefined(autoCreatedClient));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.CREATE, `clients/${newClientId}`);
+      }
       
       finalClientId = newClientId;
     }
 
     const projectId = `proj-${Date.now()}`;
-    const newProject: Project = {
+    const newProject: Project & { owner_id: string } = {
       ...newProjectData,
       client_id: finalClientId,
       id: projectId,
       created_at: new Date().toISOString(),
-      agency_profile: profile // inject current profile state snapshot
+      agency_profile: profile, // inject current profile state snapshot
+      owner_id: activeOwnerId
     };
 
-    if (user) {
-      setIsSyncing(true);
-      const projectWithAuth: Project & { owner_id: string } = {
-        ...newProject,
-        owner_id: user.uid
-      };
-      const pathForWrite = `projects/${projectId}`;
-      try {
-        await setDoc(doc(db, 'projects', projectId), cleanUndefined(projectWithAuth));
-      } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, pathForWrite);
-      } finally {
-        setIsSyncing(false);
-      }
-    } else {
-      // Local Sandbox Save
-      const updated = [newProject, ...projects];
-      setProjects(updated);
-      localStorage.setItem('project_a_db', JSON.stringify(updated));
+    setIsSyncing(true);
+    const pathForWrite = `projects/${projectId}`;
+    try {
+      await setDoc(doc(db, 'projects', projectId), cleanUndefined(newProject));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, pathForWrite);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
   // Delete Project Action with Dual Support
   const handleDeleteProject = async (id: string) => {
-    if (user) {
-      setIsSyncing(true);
-      const pathForDelete = `projects/${id}`;
-      try {
-        await deleteDoc(doc(db, 'projects', id));
-      } catch (error) {
-        handleFirestoreError(error, OperationType.DELETE, pathForDelete);
-      } finally {
-        setIsSyncing(false);
-      }
-    } else {
-      // Local Sandbox Delete
-      const updated = projects.filter(p => p.id !== id);
-      setProjects(updated);
-      localStorage.setItem('project_a_db', JSON.stringify(updated));
+    setIsSyncing(true);
+    const pathForDelete = `projects/${id}`;
+    try {
+      await deleteDoc(doc(db, 'projects', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, pathForDelete);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -493,51 +502,30 @@ export default function App() {
       m.id === milestoneId ? { ...m, is_completed: !m.is_completed } : m
     );
 
-    if (user) {
-      setIsSyncing(true);
-      const pathForUpdate = `projects/${projectId}`;
-      try {
-        await setDoc(doc(db, 'projects', projectId), {
-          milestones: updatedMilestones
-        }, { merge: true });
-      } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, pathForUpdate);
-      } finally {
-        setIsSyncing(false);
-      }
-    } else {
-      // Local Sandbox Toggle
-      const updated = projects.map(p => {
-        if (p.id === projectId) {
-          return { ...p, milestones: updatedMilestones };
-        }
-        return p;
-      });
-      setProjects(updated);
-      localStorage.setItem('project_a_db', JSON.stringify(updated));
+    setIsSyncing(true);
+    const pathForUpdate = `projects/${projectId}`;
+    try {
+      await setDoc(doc(db, 'projects', projectId), {
+        milestones: updatedMilestones
+      }, { merge: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, pathForUpdate);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
   // Simulating Razorpay / UPI checkout completed by client or direct force payout toggle
   const handleUpdatePayment = async (id: string, isPaid: boolean) => {
-    if (user) {
-      setIsSyncing(true);
-      const pathForUpdate = `projects/${id}`;
-      try {
-        // Specifically updates is_paid only, matching high security ruleset constraints
-        await setDoc(doc(db, 'projects', id), { is_paid: isPaid }, { merge: true });
-      } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, pathForUpdate);
-      } finally {
-        setIsSyncing(false);
-      }
-    } else {
-      // Local Sandbox payment completion
-      const updated = projects.map(p => 
-        p.id === id ? { ...p, is_paid: isPaid } : p
-      );
-      setProjects(updated);
-      localStorage.setItem('project_a_db', JSON.stringify(updated));
+    setIsSyncing(true);
+    const pathForUpdate = `projects/${id}`;
+    try {
+      // Specifically updates is_paid only, matching high security ruleset constraints
+      await setDoc(doc(db, 'projects', id), { is_paid: isPaid }, { merge: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, pathForUpdate);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -549,11 +537,23 @@ export default function App() {
 
   // Google OAuth Operations
   const handleSignInWithGoogle = async () => {
+    setAuthError(null);
     const provider = new GoogleAuthProvider();
     try {
       await signInWithPopup(auth, provider);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Google Auth failed pop-up execution: ", error);
+      const code = error?.code || '';
+      const message = error?.message || '';
+      
+      if (code === 'auth/unauthorized-domain' || message.includes('auth/unauthorized-domain') || message.includes('domain is not authorized')) {
+        setAuthError('unauthorized-domain');
+        setShowAuthTroubleshooter(true);
+      } else if (code === 'auth/popup-closed-by-user' || message.includes('popup-closed-by-user')) {
+        setAuthError('popup-closed');
+      } else {
+        setAuthError(message || 'An unexpected authentication error occurred.');
+      }
     }
   };
 
@@ -569,56 +569,86 @@ export default function App() {
   };
 
   // Client Management Handlers
-  const handleAddClient = (newClient: Omit<ClientRecord, 'id' | 'created_at'>) => {
-    const client: ClientRecord = {
+  const handleAddClient = async (newClient: Omit<ClientRecord, 'id' | 'created_at'>) => {
+    const activeOwnerId = user ? user.uid : sandboxUserId;
+    const clientId = `client-${Date.now()}`;
+    const clientWithAuth: ClientRecord & { owner_id: string } = {
       ...newClient,
-      id: `client-${Date.now()}`,
-      created_at: new Date().toISOString()
+      id: clientId,
+      created_at: new Date().toISOString(),
+      owner_id: activeOwnerId
     };
-    const updated = [client, ...clients];
-    setClients(updated);
-    localStorage.setItem('project_a_clients', JSON.stringify(updated));
+    try {
+      await setDoc(doc(db, 'clients', clientId), cleanUndefined(clientWithAuth));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `clients/${clientId}`);
+    }
   };
 
-  const handleDeleteClient = (id: string) => {
-    const updated = clients.filter(c => c.id !== id);
-    setClients(updated);
-    localStorage.setItem('project_a_clients', JSON.stringify(updated));
+  const handleDeleteClient = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'clients', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `clients/${id}`);
+    }
   };
 
-  const handleUpdateClient = (updatedClient: ClientRecord) => {
-    const updated = clients.map(c => c.id === updatedClient.id ? updatedClient : c);
-    setClients(updated);
-    localStorage.setItem('project_a_clients', JSON.stringify(updated));
+  const handleUpdateClient = async (updatedClient: ClientRecord) => {
+    const activeOwnerId = user ? user.uid : sandboxUserId;
+    const clientWithAuth = {
+      ...updatedClient,
+      owner_id: activeOwnerId
+    };
+    try {
+      await setDoc(doc(db, 'clients', updatedClient.id), cleanUndefined(clientWithAuth), { merge: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `clients/${updatedClient.id}`);
+    }
   };
 
   // Invoice Management Handlers
-  const handleAddInvoice = (newInvoice: Omit<Invoice, 'id'>) => {
-    const invoice: Invoice = {
+  const handleAddInvoice = async (newInvoice: Omit<Invoice, 'id'>) => {
+    const activeOwnerId = user ? user.uid : sandboxUserId;
+    const invoiceId = `inv-${Date.now()}`;
+    const invoiceWithAuth: Invoice & { owner_id: string } = {
       ...newInvoice,
-      id: `inv-${Date.now()}`
+      id: invoiceId,
+      owner_id: activeOwnerId
     };
-    const updated = [invoice, ...invoices];
-    setInvoices(updated);
-    localStorage.setItem('project_a_invoices', JSON.stringify(updated));
+    try {
+      await setDoc(doc(db, 'invoices', invoiceId), cleanUndefined(invoiceWithAuth));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, `invoices/${invoiceId}`);
+    }
   };
 
-  const handleDeleteInvoice = (id: string) => {
-    const updated = invoices.filter(i => i.id !== id);
-    setInvoices(updated);
-    localStorage.setItem('project_a_invoices', JSON.stringify(updated));
+  const handleDeleteInvoice = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'invoices', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `invoices/${id}`);
+    }
   };
 
-  const handleUpdateInvoiceStatus = (id: string, status: Invoice['status']) => {
-    const updated = invoices.map(i => i.id === id ? { ...i, status } : i);
-    setInvoices(updated);
-    localStorage.setItem('project_a_invoices', JSON.stringify(updated));
+  const handleUpdateInvoiceStatus = async (id: string, status: Invoice['status']) => {
+    try {
+      await setDoc(doc(db, 'invoices', id), { status }, { merge: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `invoices/${id}`);
+    }
   };
 
-  const handleUpdateInvoice = (updatedInvoice: Invoice) => {
-    const updated = invoices.map(i => i.id === updatedInvoice.id ? updatedInvoice : i);
-    setInvoices(updated);
-    localStorage.setItem('project_a_invoices', JSON.stringify(updated));
+  const handleUpdateInvoice = async (updatedInvoice: Invoice) => {
+    const activeOwnerId = user ? user.uid : sandboxUserId;
+    const invoiceWithAuth = {
+      ...updatedInvoice,
+      owner_id: activeOwnerId
+    };
+    try {
+      await setDoc(doc(db, 'invoices', updatedInvoice.id), cleanUndefined(invoiceWithAuth), { merge: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `invoices/${updatedInvoice.id}`);
+    }
   };
 
   // View navigation helpers
@@ -662,19 +692,58 @@ export default function App() {
         </div>
 
         {/* Hero Section Container */}
-        <main className="max-w-3xl w-full mx-auto px-6 py-16 flex-1 flex flex-col justify-center items-center text-center">
+        <main className="max-w-3xl w-full mx-auto px-6 py-12 flex-1 flex flex-col justify-center items-center text-center">
           <div className="mb-6 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#fdfaf2] border border-[#fdfaf2]/90 text-xs font-semibold text-[#8b7235]">
             <KeyRound className="w-3.5 h-3.5" />
             <span>Cryptographic Deliverables Locking Tunnel</span>
           </div>
 
-          <h1 className="text-4xl md:text-5xl font-black tracking-tight text-[#1c1b18] leading-tight font-display mb-6">
+          <h1 className="text-4xl md:text-5xl font-black tracking-tight text-[#1c1b18] leading-tight font-display mb-4">
             Release digital deliverables <span className="underline decoration-1 decoration-[#8b7235]/60 underline-offset-4">only upon</span> client checkout settlement
           </h1>
 
-          <p className="text-sm md:text-base text-stone-500 leading-relaxed max-w-xl mb-10 font-sans">
+          <p className="text-sm text-stone-500 leading-relaxed max-w-xl mb-8 font-sans">
             Vertex secure-lock bridges. Generate an encrypted channel for design assets, documents, database schemas, and packages. Your client unlocks direct source downloads instantly upon verifying UPI checkout.
           </p>
+
+          {/* Dynamic Authentication Feedback Banner */}
+          {authError && (
+            <div className="w-full max-w-md bg-amber-50 border border-amber-200 rounded-xl p-4 text-left mb-6 font-sans">
+              <div className="flex gap-2.5 items-start">
+                <ShieldAlert className="w-4 h-4 text-[#8b7235] shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="text-xs font-bold text-neutral-900 uppercase tracking-wide">
+                    {authError === 'unauthorized-domain' 
+                      ? 'Firebase Authorized Domain Blocked' 
+                      : authError === 'popup-closed'
+                      ? 'Authentication Pop-Up Closed'
+                      : 'Firebase Connection Issue'}
+                  </h4>
+                  <p className="text-[11px] text-stone-500 mt-1 leading-relaxed">
+                    {authError === 'unauthorized-domain'
+                      ? `Your Firebase app's Authorized Domains list does not authorize this preview environment's URL hostname.`
+                      : authError === 'popup-closed'
+                      ? 'The Google sign-in window was closed before completing the handshake. Please try again.'
+                      : `Auth failed. Details: ${authError}`}
+                  </p>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      onClick={() => setShowAuthTroubleshooter(true)}
+                      className="px-2.5 py-1 bg-[#1c1b18] text-[#faf9f6] text-[10px] font-bold rounded-md hover:bg-black transition-all cursor-pointer"
+                    >
+                      Show Troubleshooter Guide
+                    </button>
+                    <button
+                      onClick={() => setAuthError(null)}
+                      className="px-2 py-1 text-stone-400 hover:text-stone-600 text-[10px] font-medium transition-all cursor-pointer"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="flex flex-col sm:flex-row items-center gap-4 w-full justify-center max-w-md">
             {/* Google Authentication */}
@@ -705,6 +774,105 @@ export default function App() {
               <span>Sandbox Simulator</span>
             </button>
           </div>
+
+          <div className="mt-4 mb-2">
+            <button
+              onClick={() => setShowAuthTroubleshooter(!showAuthTroubleshooter)}
+              className="text-[11px] text-[#8b7235] hover:text-stone-700 underline underline-offset-2 font-medium cursor-pointer"
+            >
+              {showAuthTroubleshooter ? "Hide Debugger & Authorized Domains Guide" : "Having domain authorization issues or no Firebase console access?"}
+            </button>
+          </div>
+
+          {/* Interactive Debugger / Setup Guide Drawer */}
+          <AnimatePresence>
+            {showAuthTroubleshooter && (
+              <motion.div
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 15 }}
+                className="w-full max-w-xl bg-white border border-stone-200 rounded-2xl p-6 text-left shadow-sm mt-4 font-sans"
+              >
+                <div className="flex items-center gap-2 mb-4">
+                  <span className="w-2 h-2 bg-amber-500 rounded-full animate-ping" />
+                  <h3 className="text-xs font-bold text-neutral-900 uppercase tracking-wider">
+                    Firebase Authorized Domains Manual Locksmith
+                  </h3>
+                </div>
+
+                <p className="text-[11.5px] text-stone-500 leading-relaxed mb-4">
+                  Because this safe staging workspace is hosted inside secure Google Cloud containers, Google sign-ins initialized via Firebase SDK will get blocked <strong>until</strong> this specific preview domain is authorized in your database console.
+                </p>
+
+                {/* Domain Copy Area */}
+                <div className="bg-stone-50 border border-stone-200 rounded-xl p-3.5 space-y-2 mb-5">
+                  <div className="flex items-center justify-between gap-2.5">
+                    <div>
+                      <span className="text-[9.5px] uppercase font-bold text-stone-400 block tracking-widest leading-none">CURRENT DOMAIN UNLOCK KEY</span>
+                      <code className="text-[11px] font-mono font-bold text-[#8b7235] block mt-1 break-all">
+                        {window.location.hostname}
+                      </code>
+                    </div>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(window.location.hostname);
+                        alert("Domain hostname successfully copied to clipboard!");
+                      }}
+                      className="whitespace-nowrap px-3 py-1.5 bg-[#1c1b18] hover:bg-black text-[#faf9f6] text-[10px] font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer"
+                    >
+                      Copy Domain
+                    </button>
+                  </div>
+                </div>
+
+                {/* Step Matrix */}
+                <div className="space-y-3 mb-6">
+                  <h4 className="text-[10px] font-extrabold pb-1.5 text-stone-400 border-b border-stone-100 uppercase tracking-widest">
+                    Quick Setup Steps (Firebase Console)
+                  </h4>
+                  <div className="text-xs space-y-2">
+                    <p className="text-stone-605">
+                      <strong className="text-neutral-800">1.</strong> Open your Firebase project console at{" "}
+                      <a href="https://console.firebase.google.com" target="_blank" rel="noreferrer" className="text-[#8b7235] hover:underline">
+                        console.firebase.google.com
+                      </a>
+                    </p>
+                    <p className="text-stone-605">
+                      <strong className="text-neutral-800">2.</strong> Select your project, navigate to <strong className="text-neutral-800">Authentication</strong>, and click the <strong className="text-neutral-800">Settings</strong> tab.
+                    </p>
+                    <p className="text-stone-605">
+                      <strong className="text-neutral-800">3.</strong> Scroll to the <strong className="text-neutral-800">Authorized Domains</strong> segment and click <strong className="text-neutral-800">Add Domain</strong>.
+                    </p>
+                    <p className="text-stone-605">
+                      <strong className="text-neutral-800">4.</strong> Paste the copied domain from above, click Save, and refresh this page to try sign-in again!
+                    </p>
+                  </div>
+                </div>
+
+                {/* Ultimate Bypasser */}
+                <div className="border-t border-dashed border-stone-150 pt-5 text-center">
+                  <span className="text-[10px] uppercase font-bold text-stone-400 block mb-3.5 tracking-widest">
+                    No Console Access or Want a Zero-Auth Solution?
+                  </span>
+                  <button
+                    onClick={() => {
+                      setProjects(DEFAULT_PROJECTS);
+                      setClients(DEFAULT_CLIENTS);
+                      setInvoices(DEFAULT_INVOICES);
+                      setIsSandboxUnlocked(true);
+                    }}
+                    className="w-full py-2.5 bg-amber-50 border border-amber-200/85 text-[#8b7235] hover:text-[#faf9f6] hover:bg-[#8b7235] hover:border-[#8b7235] rounded-xl text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>Launch Fully-Persistent Offline Sandbox</span>
+                  </button>
+                  <p className="text-[10px] text-stone-400 mt-2 leading-relaxed">
+                    Locks down files, generates complete UPI billing, tracks client checkouts, and builds downloadable invoice PDFs. <strong>100% functional locally in your browser.</strong>
+                  </p>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <div className="mt-16 border-t border-dashed border-stone-200 w-full pt-8 grid grid-cols-1 md:grid-cols-3 gap-6 text-left max-w-2xl">
             <div>
@@ -835,7 +1003,7 @@ export default function App() {
         {/* Footer Area */}
         <footer className="border-t border-[#ebdcb9]/20 py-6 px-12 bg-white/20 select-none text-center">
           <p className="text-[10px] text-stone-400 font-mono uppercase tracking-wider">
-            Stack Gateway Lock System Initializer. Vertex Labs © 2026.
+            Flodech Gateway Lock System Initializer. Vertex Labs © 2026.
           </p>
         </footer>
       </div>
