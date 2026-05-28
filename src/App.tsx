@@ -52,14 +52,14 @@ function cleanUndefined<T>(obj: T): T {
 }
 
 const DEFAULT_PROFILE: FreelancerProfile = {
-  agency_name: "Vertex Design Studio",
-  freelancer_name: "Dishant",
-  role_title: "Creative Director & UI Engineer",
-  bio: "Crafting beautiful, functional digital interactions. We build custom React frontends, robust Node APIs, and pristine micro-motion interfaces.",
-  website_url: "https://vertexlabs.io",
-  github_url: "https://github.com",
-  twitter_url: "https://twitter.com",
-  upi_id: "dishant@upi"
+  agency_name: "Your Agency",
+  freelancer_name: "Your Name",
+  role_title: "Your Role",
+  bio: "Lorem ispum donor",
+  website_url: "example.com",
+  github_url: "example",
+  twitter_url: "example",
+  upi_id: "xyz@upi"
 };
 
 const DEFAULT_CLIENTS: ClientRecord[] = [
@@ -73,26 +73,6 @@ const DEFAULT_CLIENTS: ClientRecord[] = [
     created_at: new Date(Date.now() - 60 * 24 * 3600 * 1000).toISOString(),
     avatar_color: "bg-blue-500"
   },
-  {
-    id: "client-2",
-    name: "Athera Studio Delhi",
-    email: "operations@athera.design",
-    company_name: "Athera Design House",
-    phone: "+91 88888 77777",
-    notes: "Backend architecture and admin panels. Prefers bulk deliveries.",
-    created_at: new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString(),
-    avatar_color: "bg-emerald-500"
-  },
-  {
-    id: "client-3",
-    name: "Creative Pulse Agency",
-    email: "hello@creativepulse.io",
-    company_name: "Creative Pulse Ltd",
-    phone: "+91 99001 12233",
-    notes: "Tailwind responsive page layouts and marketing interactions.",
-    created_at: new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString(),
-    avatar_color: "bg-indigo-500"
-  }
 ];
 
 // Pre-seeded high fidelity mock data for offline local mode
