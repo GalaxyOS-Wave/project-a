@@ -30,7 +30,7 @@ export interface FirestoreErrorInfo {
 }
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId); /* CRITICAL: The app will break without this line */
+export const db = getFirestore(app); /* CRITICAL: The app will break without this line */
 export const auth = getAuth();
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
