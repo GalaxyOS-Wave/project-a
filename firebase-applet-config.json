@@ -1,10 +1,10 @@
 {
-  apiKey: "AIzaSyCsT8Wsq0GnunDjhwKbg2XYFKdo6L8MKGg",
-  authDomain: "flodech.firebaseapp.com",
-  projectId: "flodech",
-  storageBucket: "flodech.firebasestorage.app",
-  messagingSenderId: "681292072289",
-  firestoreDatabaseId: "(default)"
-  appId: "1:681292072289:web:c9b16557d05c604aa63120",
-  measurementId: "G-VKXZC4ZWHV"
-};
+  "apiKey": "AIzaSyCsT8Wsq0GnunDjhwKbg2XYFKdo6L8MKGg",
+  "authDomain": "flodech.firebaseapp.com",
+  "projectId": "flodech",
+  "storageBucket": "flodech.firebasestorage.app",
+  "messagingSenderId": "681292072289",
+  "firestoreDatabaseId": "(default)",
+  "appId": "1:681292072289:web:c9b16557d05c604aa63120",
+  "measurementId": "G-VKXZC4ZWHV"
+}
