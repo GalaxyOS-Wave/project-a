@@ -1,10 +1,10 @@
 {
-  "projectId": "scientific-conquest-blsxp",
-  "appId": "1:425194002770:web:0bd926ff113a6b5c23028b",
-  "apiKey": "AIzaSyCucs1zJq2wn4FFcCnYPLosLgrbyTtJrJ0",
-  "authDomain": "studio-8483322952-7684f.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-4b80da73-7aa0-4d13-bcd7-efc41991a807",
-  "storageBucket": "scientific-conquest-blsxp.firebasestorage.app",
-  "messagingSenderId": "425194002770",
-  "measurementId": ""
-}
+  apiKey: "AIzaSyCsT8Wsq0GnunDjhwKbg2XYFKdo6L8MKGg",
+  authDomain: "flodech.firebaseapp.com",
+  projectId: "flodech",
+  storageBucket: "flodech.firebasestorage.app",
+  messagingSenderId: "681292072289",
+  firestoreDatabaseId: "(default)"
+  appId: "1:681292072289:web:c9b16557d05c604aa63120",
+  measurementId: "G-VKXZC4ZWHV"
+};
